@@ -4,32 +4,39 @@
     <meta charset="UTF-8">
     <title>Inscrição - XVII Semana Universitária</title>
     <style>
+        /* Reset e fontes básicas */
         body {
             font-family: 'Segoe UI', sans-serif;
             background-color: #f0f8ff;
             margin: 0;
             padding: 0;
         }
+        /* “Card” centralizado */
         .container {
-            max-width: 680px;
+            max-width: 720px;
             margin: 40px auto;
             background-color: #ffffff;
             padding: 30px;
             border-radius: 12px;
             box-shadow: 0 0 12px rgba(0, 0, 0, 0.1);
         }
+        /* Título */
         h2 {
             text-align: center;
             color: #003366;
         }
+        /* Rótulos dos campos */
         label {
             font-weight: bold;
             color: #003366;
+            margin-top: 12px;
+            display: block;
         }
+        /* Inputs, selects e file uploads */
         input[type="text"],
         input[type="email"],
-        select,
-        input[type="file"] {
+        input[type="file"],
+        select {
             width: 100%;
             padding: 10px;
             margin-top: 6px;
@@ -37,6 +44,7 @@
             border: 1px solid #cccccc;
             border-radius: 5px;
         }
+        /* Botão de envio */
         button {
             background-color: #003366;
             color: white;
@@ -45,20 +53,24 @@
             border-radius: 5px;
             width: 100%;
             font-size: 16px;
+            cursor: pointer;
         }
         button:hover {
             background-color: #002244;
         }
+        /* Logomarca centralizada */
         .logo {
             display: block;
             margin: 0 auto 20px auto;
             max-width: 100%;
         }
+        /* Mensagem de erro (vermelho) */
         .erro {
             color: red;
             font-weight: bold;
             margin-bottom: 10px;
         }
+        /* Seção de PIX (com QR) */
         .pix-section {
             margin-top: 30px;
             border-top: 1px solid #ccc;
@@ -70,13 +82,42 @@
             margin-top: 10px;
         }
     </style>
+    <script>
+        // Função para mostrar/ocultar campos de submissão
+        function toggleSubmissao() {
+            const tipo = document.querySelector('input[name="tipo_participacao"]:checked').value;
+            if (tipo === 'com') {
+                document.getElementById('submissao-campos').style.display = 'block';
+            } else {
+                document.getElementById('submissao-campos').style.display = 'none';
+            }
+        }
+        // Ao carregar a página, certifique-se de que o bloco de submissão esteja oculto
+        window.onload = function() {
+            toggleSubmissao();
+        }
+    </script>
 </head>
 <body>
     <div class="container">
-        <img src="{{ url_for('static', filename='logomarca_seuni.jpg') }}" alt="Logomarca SEUNI" class="logo">
+        <!-- Logomarca do evento -->
+        <img src="{{ url_for('static', filename='logomarca_seuni.jpg') }}"
+             alt="Logomarca SEUNI"
+             class="logo">
+
         <h2>Formulário de Inscrição</h2>
 
         <form method="POST" enctype="multipart/form-data">
+            <!-- 1) Tipo de participação -->
+            <label>Tipo de participação:</label>
+            <input type="radio" name="tipo_participacao" value="sem"
+                   onchange="toggleSubmissao()" checked>
+            Sem submissão de trabalho<br>
+            <input type="radio" name="tipo_participacao" value="com"
+                   onchange="toggleSubmissao()">
+            Com submissão de trabalho<br><br>
+
+            <!-- 2) Campos comuns -->
             <label>Nome completo:</label>
             <input type="text" name="nome" required>
 
@@ -93,21 +134,14 @@
                 <option value="Ciências Contábeis">Ciências Contábeis</option>
                 <option value="Matemática">Matemática</option>
                 <option value="Educação do Campo">Educação do Campo</option>
-                <option value="Outro">Outro</option>
             </select>
 
             <label>Categoria:</label>
             <select name="categoria" required>
-                <option value="Discente de graduação - R$30,00">Discente de graduação</option>
-                <option value="Docente do ensino superior - R$70,00">Docente do ensino superior</option>
-                <option value="Professor da educação básica - R$30,00">Professor da educação básica</option>
-                <option value="Técnico administrativo - R$50,00">Técnico administrativo</option>
-            </select>
-
-            <label>Grupo de Trabalho:</label>
-            <select name="gt" required>
-                <option value="GT 1 - Matemática">GT 1 - Matemática</option>
-                <option value="GT 2 - Contábeis">GT 2 - Contábeis</option>
+                <option value="Discente de graduação">Discente de graduação</option>
+                <option value="Docente do ensino superior">Docente do ensino superior</option>
+                <option value="Professor da educação básica">Professor da educação básica</option>
+                <option value="Técnico administrativo">Técnico administrativo</option>
             </select>
 
             <label>Minicurso ou Oficina:</label>
@@ -120,21 +154,66 @@
                     {% endif %}
                 {% endfor %}
             </select>
-
             {% if erros.minicurso %}
-                <p class="erro">{{ erros.minicurso }}</p>
+                <div class="erro">{{ erros.minicurso }}</div>
             {% endif %}
 
-            <div class="pix-section">
-                <p><strong>Efetue o pagamento via PIX utilizando o QR Code abaixo</strong></p>
-                <img src="{{ url_for('static', filename='pix_qrcode.jpg') }}" alt="QR Code do PIX">
-                <p>Após o pagamento, envie o comprovante abaixo (em imagem ou PDF):</p>
-                <input type="file" name="comprovante" accept=".pdf,.jpg,.jpeg,.png" required>
+            <!-- 3) Bloco específico para quem “com submissão” -->
+            <div id="submissao-campos" style="display: none;">
+                <label>Título do trabalho:</label>
+                <input type="text" name="titulo_trabalho">
+                {% if erros.titulo_trabalho %}
+                    <div class="erro">{{ erros.titulo_trabalho }}</div>
+                {% endif %}
+
+                <label>Autores do trabalho:</label>
+                <input type="text" name="autores">
+                {% if erros.autores %}
+                    <div class="erro">{{ erros.autores }}</div>
+                {% endif %}
+
+                <label>Modalidade:</label>
+                <select name="modalidade">
+                    <option value="Comunicação Oral">Comunicação Oral</option>
+                    <option value="Banner">Banner</option>
+                </select>
+                {% if erros.modalidade %}
+                    <div class="erro">{{ erros.modalidade }}</div>
+                {% endif %}
+
+                <label>Grupo de Trabalho:</label>
+                <select name="gt">
+                    {% for gt in grupos_trabalho %}
+                        <option value="{{ gt }}">{{ gt }}</option>
+                    {% endfor %}
+                </select>
+                {% if erros.gt %}
+                    <div class="erro">{{ erros.gt }}</div>
+                {% endif %}
+
+                <label>Resumo expandido (arquivo .docx):</label>
+                <input type="file" name="resumo_doc" accept=".docx">
+                {% if erros.resumo_doc %}
+                    <div class="erro">{{ erros.resumo_doc }}</div>
+                {% endif %}
             </div>
 
+            <!-- 4) Seção de PIX e comprovante (sempre visível) -->
+            <div class="pix-section">
+                <p><strong>Efetue o pagamento via PIX utilizando o QR Code abaixo:</strong></p>
+                <img src="{{ url_for('static', filename='pix_qrcode.jpg') }}" alt="QR Code do PIX">
+                <p>Envie o comprovante de pagamento (PDF ou imagem):</p>
+                <input type="file" name="comprovante" accept=".pdf,.jpg,.jpeg,.png" required>
+                {% if erros.comprovante %}
+                    <div class="erro">{{ erros.comprovante }}</div>
+                {% endif %}
+            </div>
+
+            <!-- 5) Botão de envio -->
             <button type="submit">Enviar Inscrição</button>
         </form>
     </div>
 </body>
 </html>
+l>
 
