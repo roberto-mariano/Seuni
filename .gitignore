@@ -1,0 +1,19 @@
+# Ambiente virtual
+venv/
+
+# Cache do Python
+__pycache__/
+*.pyc
+
+# Dados gerados em runtime
+inscricoes.csv
+database.db
+
+# Pastas de upload
+comprovantes/
+submissoes/
+
+# Arquivos locais
+.env
+
+
