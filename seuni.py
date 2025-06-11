@@ -41,7 +41,7 @@ def google_creds():
 
 creds  = google_creds()
 gc     = gspread.authorize(creds)
-sheet  = gc.open(os.getenv("SHEET_NAME", "Inscricoes SEUNI 2025")).worksheet("inscricoes")
+sheet  = gc.open(os.getenv("SHEET_NAME", "1JAyGprtOy2i2mZZ7i3KUoWY4MeZDc1JV")).worksheet("inscricoes")
 drive  = build('drive', 'v3', credentials=creds)
 
 FOLDER_COMPROVANTES = os.environ["DRIVE_COMPROVANTES_ID"]
