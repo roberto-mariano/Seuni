@@ -16,4 +16,6 @@ submissoes/
 # Arquivos locais
 .env
 
+#Arquivo JSON SEUNI
+seuni-bot.json
 

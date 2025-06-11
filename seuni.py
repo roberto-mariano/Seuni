@@ -1,22 +1,14 @@
+import os, json, base64, re, tempfile, datetime
 from flask import Flask, render_template, request
-import pandas as pd
-import os
 from werkzeug.utils import secure_filename
+import gspread, pandas as pd
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
 
-# ──────────────────────────────────────────────────────────────────────────────
-# CONFIGURAÇÃO BÁSICA
-# ──────────────────────────────────────────────────────────────────────────────
-app = Flask(__name__)
-
-ARQUIVO_CSV = 'inscricoes.csv'
-UPLOAD_FOLDER_COMPROVANTES = 'comprovantes'
-UPLOAD_FOLDER_SUBMISSOES   = 'submissoes'
-
-# Extensões aceitas
-ALLOWED_EXTENSIONS_COMPROVANTE = {'pdf', 'jpg', 'jpeg', 'png'}
-ALLOWED_EXTENSIONS_RESUMO      = {'docx'}
-
-# Grupos de Trabalho
+# ── Config constantes ──────────────────────────────────────────────
+LIMITES_MINICURSO = {'OF1':2, 'OF2':2, 'MN1':2, 'MN2':2}
+MODALIDADES = ["Comunicação Oral", "Banner"]
 GRUPOS_TRABALHO = [
     "GT 1 - Matemática, Modelagem e Tecnologias Aplicadas",
     "GT 2 - Desafios Contemporâneos no Ensino e na Aprendizagem da Matemática",
@@ -30,140 +22,143 @@ GRUPOS_TRABALHO = [
     "GT 10 - Tecnologia, gestão e inclusão na educação"
 ]
 
-# Modalidades possíveis
-MODALIDADES = ["Comunicação Oral", "Banner"]
+# ── Helper: credenciais Google ─────────────────────────────────────
+def google_creds():
+    if os.path.exists("seuni-bot.json"):
+        return Credentials.from_service_account_file(
+            "seuni-bot.json",
+            scopes=[
+                "https://www.googleapis.com/auth/drive",
+                "https://www.googleapis.com/auth/spreadsheets"
+            ])
+    data = base64.b64decode(os.environ["GOOGLE_CREDS_B64"])
+    return Credentials.from_service_account_info(
+        json.loads(data),
+        scopes=[
+            "https://www.googleapis.com/auth/drive",
+            "https://www.googleapis.com/auth/spreadsheets"
+        ])
 
-# ──────────────────────────────────────────────────────────────────────────────
-# PREPARO DE PASTAS
-# ──────────────────────────────────────────────────────────────────────────────
-# Pasta de comprovantes
-os.makedirs(UPLOAD_FOLDER_COMPROVANTES, exist_ok=True)
+creds  = google_creds()
+gc     = gspread.authorize(creds)
+sheet  = gc.open(os.getenv("SHEET_NAME", "Inscricoes SEUNI 2025")).worksheet("inscricoes")
+drive  = build('drive', 'v3', credentials=creds)
 
-# Pasta base de submissões + subpastas Modalidade/GT
-for modalidade in MODALIDADES:
-    pasta_mod = os.path.join(UPLOAD_FOLDER_SUBMISSOES,
-                             modalidade.replace('ç','c').replace('ã','a').replace('í','i'))
-    for gt in GRUPOS_TRABALHO:
-        pasta_gt = os.path.join(pasta_mod, gt.replace('/', '-').replace(':', ''))
-        os.makedirs(pasta_gt, exist_ok=True)
+FOLDER_COMPROVANTES = os.environ["DRIVE_COMPROVANTES_ID"]
+FOLDER_RESUMOS      = os.environ["DRIVE_RESUMOS_ID"]
 
-# ──────────────────────────────────────────────────────────────────────────────
-# FUNÇÕES AUXILIARES
-# ──────────────────────────────────────────────────────────────────────────────
+# ── Utils ──────────────────────────────────────────────────────────
+def sanitize(text: str) -> str:
+    """Remove caracteres problemáticos para nomes de arquivo."""
+    return re.sub(r"[^\w\s.-]", "_", text, flags=re.UNICODE)
 
-def allowed_file(filename: str, allowed_set: set) -> bool:
-    """Verifica extensão do arquivo."""
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in allowed_set
+def upload(local_path: str, parent_id: str) -> str:
+    """Faz upload ao Drive e retorna link compartilhável."""
+    meta = {"name": os.path.basename(local_path), "parents": [parent_id]}
+    media = MediaFileUpload(local_path, resumable=False)
+    file = drive.files().create(body=meta, media_body=media, fields="webViewLink,id").execute()
+    return file["webViewLink"]
 
+def get_subfolder(modalidade: str, gt: str) -> str:
+    """Garante subpasta modalidade/gt dentro de FOLDER_RESUMOS e retorna o ID."""
+    # 1º nível = modalidade
+    mod_id = find_or_create(sanitize(modalidade), FOLDER_RESUMOS)
+    # 2º nível = GT
+    return find_or_create(sanitize(gt), mod_id)
+
+def find_or_create(name: str, parent: str) -> str:
+    q = (f"mimeType='application/vnd.google-apps.folder' and trashed=false and "
+         f"name='{name}' and '{parent}' in parents")
+    results = drive.files().list(q=q, fields="files(id)", pageSize=1).execute()
+    items = results.get("files", [])
+    if items:
+        return items[0]["id"]
+    meta = {"name": name,
+            "mimeType": "application/vnd.google-apps.folder",
+            "parents": [parent]}
+    return drive.files().create(body=meta, fields="id").execute()["id"]
 
 def contar_vagas():
-    """Conta quantos inscritos cada minicurso/oficina já tem.
-    Se o arquivo não existir **ou** estiver vazio, devolve {} para evitar
-    pandas.errors.EmptyDataError.
-    """
-    if not os.path.exists(ARQUIVO_CSV) or os.path.getsize(ARQUIVO_CSV) == 0:
-        return {}
+    """Conta inscrições por minicurso diretamente na planilha (coluna 7)."""
     try:
-        df = pd.read_csv(ARQUIVO_CSV)
-    except pd.errors.EmptyDataError:
-        # Arquivo existe mas está vazio (sem colunas ou só quebras de linha)
+        col7 = sheet.col_values(7)[1:]  # pula cabeçalho
+    except Exception:
         return {}
-    return df['minicurso_oficina'].value_counts().to_dict()
+    return pd.Series(col7).value_counts().to_dict()
 
-# Limites fixos (2 vagas)
-LIMITES_MINICURSO = {'OF1': 2, 'OF2': 2, 'MN1': 2, 'MN2': 2}
+# ── App Flask ──────────────────────────────────────────────────────
+app = Flask(__name__)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# ROTA PRINCIPAL
-# ──────────────────────────────────────────────────────────────────────────────
-@app.route('/', methods=['GET', 'POST'])
+@app.route("/", methods=["GET", "POST"])
 def formulario():
     erros = {}
-    vagas_ocupadas = contar_vagas()
+    vagas = contar_vagas()
 
-    if request.method == 'POST':
-        # Dados comuns
-        tipo_participacao = request.form.get('tipo_participacao')  # sem ou com
-        nome        = request.form.get('nome', '').strip()
-        email       = request.form.get('email', '').strip()
-        instituicao = request.form.get('instituicao', '').strip()
-        area        = request.form.get('area')
-        categoria   = request.form.get('categoria')
-        minicurso   = request.form.get('minicurso_oficina')
+    if request.method == "POST":
+        # Campos comuns
+        tipo = request.form.get("tipo_participacao")
+        nome = request.form.get("nome", "").strip()
+        email = request.form.get("email", "").strip()
+        inst = request.form.get("instituicao", "").strip()
+        area = request.form.get("area")
+        cat  = request.form.get("categoria")
+        mini = request.form.get("minicurso_oficina")
 
-        # Limite de vagas
-        if vagas_ocupadas.get(minicurso, 0) >= LIMITES_MINICURSO[minicurso]:
-            erros['minicurso'] = f"A opção {minicurso} já está lotada. Escolha outra."
+        if vagas.get(mini, 0) >= LIMITES_MINICURSO[mini]:
+            erros["minicurso"] = f"{mini} esgotado."
 
-        # Comprovante de pagamento
-        comprovante = request.files.get('comprovante')
-        caminho_comprovante = ''
-        if comprovante and allowed_file(comprovante.filename, ALLOWED_EXTENSIONS_COMPROVANTE):
-            filename_comp = secure_filename(f"{nome}_{comprovante.filename}")
-            caminho_comprovante = os.path.join(UPLOAD_FOLDER_COMPROVANTES, filename_comp)
-            comprovante.save(caminho_comprovante)
+        # Comprovante
+        comp = request.files.get("comprovante")
+        comp_link = ""
+        if comp and comp.filename:
+            with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                comp.save(tmp.name)
+                comp_link = upload(tmp.name, FOLDER_COMPROVANTES)
         else:
-            erros['comprovante'] = "Envie comprovante em PDF ou imagem (jpg/jpeg/png)."
+            erros["comprovante"] = "Envie comprovante."
 
-        # Se for submissão
-        titulo = autores = modalidade = gt = caminho_resumo = ''
-        if tipo_participacao == 'com':
-            titulo     = request.form.get('titulo_trabalho', '').strip()
-            autores    = request.form.get('autores', '').strip()
-            modalidade = request.form.get('modalidade')
-            gt         = request.form.get('gt')
+        # Se submissão
+        titulo = autores = modalidade = gt = resumo_link = ""
+        if tipo == "com":
+            titulo     = request.form.get("titulo_trabalho", "").strip()
+            autores    = request.form.get("autores", "").strip()
+            modalidade = request.form.get("modalidade")
+            gt         = request.form.get("gt")
 
-            if not titulo:
-                erros['titulo_trabalho'] = "Título obrigatório."
-            if not autores:
-                erros['autores'] = "Autores obrigatórios."
+            if not titulo:  erros["titulo_trabalho"] = "Título obrigatório"
+            if not autores: erros["autores"] = "Autores obrigatórios"
             if modalidade not in MODALIDADES:
-                erros['modalidade'] = "Modalidade inválida."
+                erros["modalidade"] = "Modalidade inválida"
             if gt not in GRUPOS_TRABALHO:
-                erros['gt'] = "GT inválido."
+                erros["gt"] = "GT inválido"
 
-            resumo = request.files.get('resumo_doc')
-            if resumo and allowed_file(resumo.filename, ALLOWED_EXTENSIONS_RESUMO):
-                fname_resumo = secure_filename(f"{nome}_{resumo.filename}")
-                pasta_dest   = os.path.join(UPLOAD_FOLDER_SUBMISSOES,
-                                           modalidade.replace('ç','c').replace('ã','a').replace('í','i'),
-                                           gt.replace('/', '-').replace(':', ''))
-                caminho_resumo = os.path.join(pasta_dest, fname_resumo)
-                resumo.save(caminho_resumo)
+            resumo = request.files.get("resumo_doc")
+            if resumo and resumo.filename.endswith(".docx"):
+                with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                    resumo.save(tmp.name)
+                    folder = get_subfolder(modalidade, gt)
+                    resumo_link = upload(tmp.name, folder)
             else:
-                erros['resumo_doc'] = "Envie o resumo em formato .docx."
+                erros["resumo_doc"] = "Envie .docx"
 
-        # Se houver erros, reexibe formulário
         if erros:
-            return render_template('formulario.html', vagas=vagas_ocupadas, erros=erros,
+            return render_template("formulario.html", vagas=vagas, erros=erros,
                                    limites=LIMITES_MINICURSO, grupos_trabalho=GRUPOS_TRABALHO)
 
-        # Salva em CSV
-        registro = {
-            'tipo_participacao': tipo_participacao,
-            'nome': nome,
-            'email': email,
-            'instituicao': instituicao,
-            'area': area,
-            'categoria': categoria,
-            'minicurso_oficina': minicurso,
-            'titulo_trabalho': titulo,
-            'autores': autores,
-            'modalidade': modalidade,
-            'grupo_trabalho': gt,
-            'caminho_resumo': caminho_resumo,
-            'caminho_comprovante': caminho_comprovante
-        }
-        pd.DataFrame([registro]).to_csv(ARQUIVO_CSV, mode='a', header=not os.path.exists(ARQUIVO_CSV), index=False)
-        return "<h2>Inscrição realizada com sucesso!</h2>"
+        # Grava na planilha
+        linha = [
+            nome, email, inst, area, cat, tipo, mini,
+            titulo, autores, modalidade, gt,
+            comp_link, resumo_link,
+            datetime.datetime.now().isoformat(timespec="seconds")
+        ]
+        sheet.append_row(linha, value_input_option="USER_ENTERED")
 
-    # GET → renderiza formulário
-    return render_template('formulario.html', vagas=vagas_ocupadas, erros={},
+        return "<h2>Inscrição registrada com sucesso!</h2>"
+
+    return render_template("formulario.html", vagas=vagas, erros={},
                            limites=LIMITES_MINICURSO, grupos_trabalho=GRUPOS_TRABALHO)
 
-# ──────────────────────────────────────────────────────────────────────────────
-# MAIN (usa porta indicada pelo Railway)
-# ──────────────────────────────────────────────────────────────────────────────
-if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
